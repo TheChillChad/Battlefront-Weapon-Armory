@@ -136,6 +136,9 @@ h1.hero-title .accent{color:var(--cyan); text-shadow:0 0 24px var(--cyan-glow);}
 .filters-grid{display:grid; grid-template-columns:1.6fr repeat(5, 1fr); gap:14px;}
 @media(max-width:1100px){.filters-grid{grid-template-columns:1fr 1fr 1fr;}}
 @media(max-width:640px){.filters-grid{grid-template-columns:1fr 1fr;}}
+.filters-grid.mt-filters{grid-template-columns:1.6fr repeat(4, 1fr);}
+@media(max-width:1100px){.filters-grid.mt-filters{grid-template-columns:1fr 1fr 1fr;}}
+@media(max-width:640px){.filters-grid.mt-filters{grid-template-columns:1fr 1fr;}}
 .field label{
   display:block; font-family:var(--mono); font-size:10px; letter-spacing:1.5px; color:var(--muted);
   text-transform:uppercase; margin-bottom:7px;
@@ -534,7 +537,18 @@ footer.site-footer{border-top:1px solid var(--border); padding:26px 0; text-alig
     <div class="pool-wrap">
       <div class="pool-head">
         <div class="filters-title">◫ Unassigned Pool</div>
-        <input type="text" class="pool-search" id="pool-search" placeholder="Search weapon...">
+        <div class="match-count"><b id="pool-count">110</b> weapons shown</div>
+      </div>
+      <div class="filters-grid mt-filters" style="margin-bottom:16px;">
+        <div class="field search-wrap">
+          <label>Search</label>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+          <input type="text" id="mt-search" placeholder="Search weapon...">
+        </div>
+        <div class="field"><label>Class</label><select id="mt-class"></select></div>
+        <div class="field"><label>Faction</label><select id="mt-faction"></select></div>
+        <div class="field"><label>Type</label><select id="mt-type"></select></div>
+        <div class="field"><label>Attachment</label><select id="mt-attachment"></select></div>
       </div>
       <div class="pool-items" id="pool-items"></div>
     </div>
@@ -833,6 +847,7 @@ function radarSVG(datasets, size){
 const state = {
   search:'', cls:'All', faction:'All', type:'All', attachment:'All', sort:'dps_desc'
 };
+const mtState = { search:'', cls:'All', faction:'All', type:'All', attachment:'All' };
 let compareIds = JSON.parse(localStorage.getItem('bfArmory_compare')||'[]');
 let myTier = JSON.parse(localStorage.getItem('bfArmory_myTier')||'{}');
 let presets = JSON.parse(localStorage.getItem('bfArmory_presets')||'{}');
@@ -877,6 +892,12 @@ function populateFilterOptions(){
   // leaderboard class filter (reuse)
   const lbClass = document.getElementById('lb-class');
   lbClass.innerHTML = ['All Classes', ...CLASS_ORDER.filter(c=>WEAPONS.some(w=>w.class===c))].map(c=>`<option value="${c==='All Classes'?'All':c}">${c}</option>`).join('');
+
+  // my-tier pool filters (mirror armory filters)
+  document.getElementById('mt-class').innerHTML = classSel.innerHTML;
+  document.getElementById('mt-faction').innerHTML = facSel.innerHTML;
+  document.getElementById('mt-type').innerHTML = typeSel.innerHTML;
+  document.getElementById('mt-attachment').innerHTML = attSel.innerHTML;
 }
 
 function filteredWeapons(){
@@ -1166,6 +1187,18 @@ function tierFor(dps){
   if(dps>=200) return 'C';
   return 'D';
 }
+const METRIC_RANGE = {dps:RANGES.dps, dmg:RANGES.dmg, rpm:RANGES.rpm, rng:RANGES.rng};
+function tierForMetric(w, metricKey){
+  if(metricKey==='dps') return tierFor(w.dps); // keep original fixed DPS thresholds
+  const range = METRIC_RANGE[metricKey];
+  const raw = metricKey==='rng' ? Math.min(w.range_max,120) : metricValue(w, metricKey);
+  const v = norm(raw, range); // 0-100 normalized within full dataset
+  if(v>=80) return 'S';
+  if(v>=60) return 'A';
+  if(v>=40) return 'B';
+  if(v>=20) return 'C';
+  return 'D';
+}
 function renderLeaderboard(){
   const metric = document.getElementById('lb-metric').value;
   const cls = document.getElementById('lb-class').value;
@@ -1189,7 +1222,7 @@ function renderLeaderboard(){
   } else {
     const tiers = {S:[],A:[],B:[],C:[],D:[]};
     list.forEach(w=>{
-      const t = metric==='dps' ? tierFor(w.dps) : tierFor(w.dps); // tiering always based on DPS for consistency
+      const t = tierForMetric(w, metric);
       tiers[t].push(w);
     });
     const wrap = document.getElementById('lb-tiers-wrap');
@@ -1228,7 +1261,7 @@ function renderMyTier(){
   }).join('');
 
   // pool
-  renderPool(document.getElementById('pool-search').value);
+  renderPool();
 
   // drag handlers on chips
   tiersEl.querySelectorAll('.chip[draggable]').forEach(chip=>{
@@ -1258,12 +1291,20 @@ function renderMyTier(){
 
   refreshPresetSelect();
 }
-function renderPool(q){
-  q = q||'';
+function renderPool(){
   const el = document.getElementById('pool-items');
   const assigned = new Set(Object.keys(myTier));
-  const list = WEAPONS.filter(w=> !assigned.has(w.id) && w.name.toLowerCase().includes(q.toLowerCase()));
-  if(list.length===0){ el.innerHTML = `<div style="color:var(--muted);font-family:var(--mono);font-size:12px;">No unassigned weapons match.</div>`; return; }
+  const list = WEAPONS.filter(w=>{
+    if(assigned.has(w.id)) return false;
+    if(mtState.search && !w.name.toLowerCase().includes(mtState.search.toLowerCase())) return false;
+    if(mtState.cls!=='All' && w.class!==mtState.cls) return false;
+    if(mtState.faction!=='All' && w.faction!==mtState.faction) return false;
+    if(mtState.type!=='All' && w.type!==mtState.type) return false;
+    if(mtState.attachment!=='All' && !w.attachments.includes(mtState.attachment)) return false;
+    return true;
+  });
+  document.getElementById('pool-count').textContent = list.length;
+  if(list.length===0){ el.innerHTML = `<div style="color:var(--muted);font-family:var(--mono);font-size:12px;">No unassigned weapons match these filters.</div>`; return; }
   el.innerHTML = list.map(w=>`<div class="chip drag" draggable="true" data-id="${w.id}">${w.name} <span class="v">${fmtNum(w.dps)}</span></div>`).join('');
   el.querySelectorAll('.chip[draggable]').forEach(chip=>{
     chip.addEventListener('dragstart', e=>{
@@ -1271,7 +1312,19 @@ function renderPool(q){
     });
   });
 }
-document.getElementById('pool-search').addEventListener('input', (e)=>renderPool(e.target.value));
+['mt-search','mt-class','mt-faction','mt-type','mt-attachment'].forEach(id=>{
+  const el = document.getElementById(id);
+  el.addEventListener('input', onMtFilterChange);
+  el.addEventListener('change', onMtFilterChange);
+});
+function onMtFilterChange(){
+  mtState.search = document.getElementById('mt-search').value;
+  mtState.cls = document.getElementById('mt-class').value;
+  mtState.faction = document.getElementById('mt-faction').value;
+  mtState.type = document.getElementById('mt-type').value;
+  mtState.attachment = document.getElementById('mt-attachment').value;
+  renderPool();
+}
 
 // allow dropping back into pool to unassign
 document.getElementById('pool-items').addEventListener('dragover', e=>e.preventDefault());
